@@ -2,7 +2,8 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-
+import scipy.optimize
+np.set_printoptions(precision=4, linewidth=200)
 
 # return (C, L)
 # R_s, R_l must be real for now
@@ -34,6 +35,7 @@ def shunt_C_series_L_matching_network(f, R_s, R_l):
 #        |         |
 #                 
 #        |         |
+
 def EFGH_series(Z):
     EFGH = np.identity(2, dtype=complex);
     EFGH[0,1] = -Z;
@@ -51,89 +53,108 @@ def EFGH_shunt(Z):
     EFGH[1,0] = -1/Z
     return EFGH
 
-def EFGH_shunt_capacitor(ω, C):
-    return EFGH_shunt(1/(1j*ω*C))
+def EFGH_shunt_capacitor(ωvals, C):
+    I = np.identity(2, dtype=complex)
+    N = ωvals.shape[0]
+    M = np.tile(I, (N, 1, 1))
+    M[:,1,0] = -1j * ωvals * C
+    return M
 
-def EFGH_series_capcitor(ω, C):
-    return EFGH_series(1/(1j*ω*C))
+# def EFGH_series_capcitor(ω, C):
+#     return EFGH_series(1/(1j*ω*C))
 
-def EFGH_shunt_inductor(ω, L):
-    return EFGH_shunt(1j * ω * L)
+# def EFGH_shunt_inductor(ω, L):
+#     return EFGH_shunt(1j * ω * L)
 
-def EFGH_series_inductor(ω, L):
-    return EFGH_series(1j * ω * L)
-    
-
-    return EFGH_series_inductor(ω,L).dot(EFGH_shunt_capacitor(ω, C))
-
-def EFGH_dual_C_shunt_L_series_matching_network(ω, C1, L1, C2, L2):
-    net2 = EFGH_C_shunt_L_series_matching_network(ω, C2, L2)
-    return net2.dot(EFGH_C_shunt_L_series_matching_network(ω, C1, L1))
+def EFGH_series_inductor(ωvals, L):
+    I = np.identity(2, dtype=complex)
+    N = ωvals.shape[0]
+    M = np.tile(I, (N, 1, 1))
+    M[:,0,1] = -1j* ωvals * L
+    return M
 
 # power at Z_l
 
-def gen_matching_network(*p):
-    pairs = p
-    print(pairs)
-    def network(ω):
-        net = np.identity(2, dtype=complex)
-        for pair in (pairs):
-            C, L = pair
-            new_net = EFGH_series_inductor(ω, L).dot(EFGH_shunt_capacitor(ω,C))
-            net = new_net.dot(net)
-        return net
-    return network
+def gen_matching_network(fvals, *p):
+    ωvals = 2 * np.pi * fvals
+    pairs = list(p)
+    (C, L) = pairs.pop(0)
+    net = np.matmul(EFGH_series_inductor(ωvals, L), EFGH_shunt_capacitor(ωvals, C))
+    for pair in (pairs):
+        C, L = pair
+        new_net = np.matmul(EFGH_series_inductor(ωvals, L), EFGH_shunt_capacitor(ωvals, C))
+        net = np.matmul(new_net, net)
+    return net
 
 def load_power_network(Z_s, Z_l, EFGH_matching_network):
-    EFGH = EFGH_shunt(Z_l).dot(EFGH_matching_network).dot(EFGH_series(Z_s))
-    EFGH_inv = np.linalg.inv(EFGH)
+    EFGH = np.matmul(EFGH_shunt(Z_l), EFGH_matching_network)
+    EFGH = np.matmul(EFGH, EFGH_series(Z_s))
     # source voltage normalized to 1
-    V_l = 1/EFGH_inv[0,0]
+    V_l = 1/EFGH[:,1,1]
+    
     return np.abs(V_l**2 / Z_l)
     
-                                                          
-def matching_network_power_gain(Z_s, Z_l, fvals, matching_network):
-    p_vals = []
-    ω_vals = 2 * np.pi * fvals
-    for ω in (ω_vals):
-        p = load_power_network(Z_s, Z_l, matching_network(ω))
-        p_vals.append(p)
-    p_vals = np.array(p_vals) 
-    # normalize: best possible value sould be 1
-    p_vals /= (1/(4*Z_s))
-    return p_vals
+
+def logspace(start, stop, num_points):
+    logs = np.linspace(np.log10(start), np.log10(stop), num_points)
+    return 10**logs
+
+i = 0
+def optimize_network(f_vals, Z_s, Z_l):
+    def cost_function(p):
+        global i
+        i = i + 1
+        print("i = ", i)
+        C1, L1, C2, L2, C3, L3 = p
+        network = gen_matching_network(f_vals, [C1, L1], [C2, L2], [C3, L3])
+        pvals = load_power_network(Z_s, Z_l, network)
+        pvals /= 1/(4*Z_s)
+        return np.linalg.norm(1-pvals)
+    lower_bound = 1e-3
+    upper_bound = 1
+    N_args = 6
+    bounds = list(zip([lower_bound]*N_args, [upper_bound]*N_args))
+    print("bounds: ", bounds)
+    return scipy.optimize.dual_annealing(cost_function, bounds=bounds,   #maxiter=5000
+                                        # initial_temp=5e4
+    )
+    
+        
+#    network =     
+# 2 step: 20 -> 4.47 -> 1
+# 3 step: 20 -> 7.37 -> 2.71 -> 1
+# 4 step: 20 -> 9.46 -> 4.47 -> 2.11 -> 1
+# 5 step: 20 -> 11.0 -> 6.03 -> 3.31 -> 1.82 -> 1
+Z_s = 20 / np.sqrt(20)
+Z_l = 1/np.sqrt(20)
+Z_m1 = 7.37 / np.sqrt(20)
+Z_m2 = 2.71 / np.sqrt(20)
+
+f_target = 1
 
 
+f_vals = logspace(1,1.5, 100)
 
+res = optimize_network(f_vals, Z_s, Z_l)
+print(res)
+(C1, L1, C2, L2, C3, L3) = res.x
 
-# 2 step: 1000 -> 223 -> 50
-# 3 step: 1000 -> 368 -> 136 -> 50
-# 4 step: 1000 -> 473 -> 223 -> 106 -> 50
-# 5 step: 1000 -> 549 -> 302 -> 166 -> 91 -> 50
-Z_s = 1000
-Z_l = 50
-Z_m1 = 368
-Z_m2 = 136
+# C1, L1 = shunt_C_series_L_matching_network(f_target, Z_s, Z_m1)
+# C2, L2 = shunt_C_series_L_matching_network(f_target, Z_m1, Z_m2)
+# C3, L3 = shunt_C_series_L_matching_network(f_target, Z_m2, Z_l)
+# print("net1: ", C1, L1)
+# print("net2: ", C2, L2)
+# print("net3: ", C3, L3)
+# # #for i in range(1,1000):
+# #  #   print(i)
+network = gen_matching_network(f_vals, [C1, L1], [C2, L2], [C3, L3])
+# #  )
 
-f_target = 4.3e6
-
-f_vals = np.linspace(4e6, 5e6, 1000)
-
-
-C1, L1 = shunt_C_series_L_matching_network(f_target, Z_s, Z_m1)
-C2, L2 = shunt_C_series_L_matching_network(f_target, Z_m1, Z_m2)
-C3, L3 = shunt_C_series_L_matching_network(f_target, Z_m2, Z_l)
-print("net1: ", C1, L1)
-print("net2: ", C2, L2)
-print("net3: ", C3, L3)
-network = gen_matching_network([C1, L1], [C2, L2], [C3, L3])
-
-
-p_vals = matching_network_power_gain(Z_s, Z_l, f_vals, network)
-
-plt.plot(f_vals, np.sqrt(p_vals))
-plt.ylabel("insertion loss (dB)")
-plt.xlabel("f (Hz)")
+p_vals = load_power_network(Z_s, Z_l, network)
+p_vals /= 1/(4*Z_s)
+plt.plot(f_vals, np.sqrt(p_vals), "x")
+#plt.ylabel("insertion loss (dB)")
+plt.xlabel("f/f_0 (Hz)")
 plt.xscale("log")
 
 plt.grid()
