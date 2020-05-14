@@ -3,6 +3,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize
+import time
 np.set_printoptions(precision=4, linewidth=200)
 
 # return (C, L)
@@ -77,11 +78,13 @@ def EFGH_series_inductor(ωvals, L):
 
 def gen_matching_network(fvals, *p):
     ωvals = 2 * np.pi * fvals
-    pairs = list(p)
-    (C, L) = pairs.pop(0)
+    if len(p) < 2 or len(p) % 2 != 0:
+        raise Exception("gen_matching_network needs even number of args")
+    C_L_list = list(p)
+    C, L = C_L_list.pop(0), C_L_list.pop(0)
     net = np.matmul(EFGH_series_inductor(ωvals, L), EFGH_shunt_capacitor(ωvals, C))
-    for pair in (pairs):
-        C, L = pair
+    while C_L_list:
+        C, L = C_L_list.pop(0), C_L_list.pop(0)
         new_net = np.matmul(EFGH_series_inductor(ωvals, L), EFGH_shunt_capacitor(ωvals, C))
         net = np.matmul(new_net, net)
     return net
@@ -100,22 +103,22 @@ def logspace(start, stop, num_points):
     return 10**logs
 
 i = 0
-def optimize_network(f_vals, Z_s, Z_l):
+def optimize_network(f_vals, Z_s, Z_l, N_nets=3):
     def cost_function(p):
         global i
         i = i + 1
-        print("i = ", i)
-        C1, L1, C2, L2, C3, L3 = p
-        network = gen_matching_network(f_vals, [C1, L1], [C2, L2], [C3, L3])
+        if i % 1000 == 0:
+            print("i = ", i)
+        network = gen_matching_network(f_vals, *p)
         pvals = load_power_network(Z_s, Z_l, network)
         pvals /= 1/(4*Z_s)
         return np.linalg.norm(1-pvals)
     lower_bound = 1e-3
     upper_bound = 1
-    N_args = 6
+    N_args = 2 * N_nets
     bounds = list(zip([lower_bound]*N_args, [upper_bound]*N_args))
     print("bounds: ", bounds)
-    return scipy.optimize.dual_annealing(cost_function, bounds=bounds,   #maxiter=5000
+    return scipy.optimize.dual_annealing(cost_function, bounds=bounds,  #maxiter=5000
                                         # initial_temp=5e4
     )
     
@@ -125,19 +128,25 @@ def optimize_network(f_vals, Z_s, Z_l):
 # 3 step: 20 -> 7.37 -> 2.71 -> 1
 # 4 step: 20 -> 9.46 -> 4.47 -> 2.11 -> 1
 # 5 step: 20 -> 11.0 -> 6.03 -> 3.31 -> 1.82 -> 1
-Z_s = 20 / np.sqrt(20)
-Z_l = 1/np.sqrt(20)
-Z_m1 = 7.37 / np.sqrt(20)
-Z_m2 = 2.71 / np.sqrt(20)
+factor = 20
+Z_s = factor
+Z_l = 1
+Z_s /= np.sqrt(factor)
+Z_l /= np.sqrt(factor)
 
-f_target = 1
+# Z_m1 = 7.37 / np.sqrt(20)
+# Z_m2 = 2.71 / np.sqrt(20)
+
+#f_target = 1
 
 
-f_vals = logspace(1,1.5, 100)
+f_vals = logspace(1,3, 100)
 
-res = optimize_network(f_vals, Z_s, Z_l)
+t_start = time.time()
+res = optimize_network(f_vals,  Z_s, Z_l, N_nets=4)
+print("time: ", time.time() - t_start)
+
 print(res)
-(C1, L1, C2, L2, C3, L3) = res.x
 
 # C1, L1 = shunt_C_series_L_matching_network(f_target, Z_s, Z_m1)
 # C2, L2 = shunt_C_series_L_matching_network(f_target, Z_m1, Z_m2)
@@ -147,7 +156,8 @@ print(res)
 # print("net3: ", C3, L3)
 # # #for i in range(1,1000):
 # #  #   print(i)
-network = gen_matching_network(f_vals, [C1, L1], [C2, L2], [C3, L3])
+
+network = gen_matching_network(f_vals, *res.x)
 # #  )
 
 p_vals = load_power_network(Z_s, Z_l, network)
